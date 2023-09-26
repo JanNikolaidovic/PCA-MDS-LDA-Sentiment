@@ -1,0 +1,640 @@
+---
+title: "Text Analytics for Marketing: Group Assignment 1 Understanding Text Data"
+author: "Joulia Tout, Alexaxndros Stavropoulos, Ioannis Nikolaidis, Djamila Rocha"
+date: "March 31, 2023"
+output: pdf_document
+---
+
+```{r}
+require("knitr")
+opts_knit$set(root.dir = "C:/Users/ioann/Desktop")
+```
+
+## Introduction
+
+In today's digital age, online reviews have become an essential part of consumers' decision-making processes. As such, analyzing this data has become an important task for businesses looking to understand customer opinions and improve their products or services. In this project, we were challenged to analyze text data using principal component analysis (PCA), multi-dimensional scaling (MDS), sentiment analysis, and latent Dirichlet allocation (LDA). Through this analysis, we aimed to understand the opinions expressed by customers and identifying important topics discussed in the reviews.
+
+```{r}
+data <- read.csv("C:/Users/ioann/Desktop/Delta_Airline_Review_Dataset-Asof02172023.csv")
+df <- data[c(1,2,8)]
+df_verified <- df[grepl("Trip Verified", df$reviews), ]
+df_verified$reviews <- gsub("✅ Trip Verified \\| ", "", df_verified$reviews)
+df <- df_verified
+df$star.rating <- as.factor(df$star.rating)
+
+
+```
+
+## Data Description
+
+For this analysis, textual data from the Delta airline reviews was utilized. This dataset contained a starbased rating scale, going from 1 to 10 , 10 being the best possible rating score. Moreover, these star ratings were paired with textual reviews, pertaining to individual customer IDs. Furthermore, two versions of the dataset were formed. One version remained unstemmed and punctuated, as it was going to be utilized in the sentiment analysis in the subsequent stages. A second, fully cleaned vector representation version was created for the remainder of the analysis; this dataset was fully cleaned. The process of cleaning, included the removal of punctuation, stemming of words, tokenization, and removal of stop words to filter for meaningful words.
+
+```{r}
+#ds with stemming and without punctuation
+
+# First stage of cleaning, 
+df$reviews <- as.character(df$reviews) %>%
+  tolower() %>%
+  {gsub(":( |-|o)*\\("," SADSMILE ", .)} %>%       # Find :( or :-( or : ( or :o(
+  {gsub(":( |-|o)*\\)"," HAPPYSMILE ", .)} %>%     # Find :) or :-) or : ) or :o)
+  {gsub("(\"| |\\$)-+\\.-+"," NUMBER", .)} %>%     # Find numbers
+  {gsub("([0-9]+:)*[0-9]+ *am"," TIME_AM", .)} %>%         # Find time AM
+  {gsub("([0-9]+:)*[0-9]+ *pm"," TIME_PM", .)} %>%         # Find time PM
+  {gsub("-+:-+","TIME", .)} %>%                    # Find general time
+  {gsub("\\$ ?[0-9]*[\\.,]*[0-9]+"," DOLLARVALUE ", .)} %>%           # Find Dollar values
+  {gsub("[0-9]*[\\.,]*[0-9]+"," NUMBER ", .)} %>%           # Find remaining numbers
+  {gsub("-"," ", .)} %>%                           # Remove all -
+  {gsub("&"," and ", .)} %>%                       # Find general time
+  {gsub("\"+"," ", .)} %>%                         # Remove all "
+  {gsub("\\|+"," ", .)} %>%                        # Remove all |
+  {gsub("_+"," ", .)} %>%                          # Remove all _
+  {gsub(";+"," ", .)} %>%                          # Remove excess ;
+  {gsub(" +"," ", .)} %>%                          # Remove excess spaces
+  {gsub("\\.+","\\.", .)} %>%                       # Remove excess .
+  {gsub("\\bi'v\\b", "", .)} %>%                    # Remove "i'v"
+  {gsub("\\b'\\b", "", .)} %>%                       # Remove "'"
+  {gsub("\\bit\\b", "", .)}                      # Remove "it"
+
+df_tokens <- df %>%
+  unnest_tokens(word, reviews) %>%
+  filter(!str_detect(word, "\\d+")) %>% # exclude words with numbers
+  filter(!str_detect(word, "^[[:punct:]]+$")) %>% # exclude words that are only punctuation
+  anti_join(get_stopwords()) %>% # remove stopwords
+  mutate(word = wordStem(word)) # Stemming
+```
+
+```{r}
+# Create a list of non-meaningful words
+non_meaningful_words <- c("u", "us", "on", "in", "at", "of", "is", "am",
+                          "are", "was", "were", "abl","get","just", "even",
+                          "number","got","via","san","atl","it","'","i'v")
+
+# Filter out the non-meaningful words
+df_tokens <- df_tokens %>%
+  filter(!word %in% non_meaningful_words) %>%
+  filter(nchar(word) > 2)
+
+```
+
+## Analysis
+
+### Principal component analysis (PCA)
+
+In principal component analysis (PCA), the aim is to find the components that have the highest predictive accuracy and contain the largest amount of information to describe the reviews in a high-dimensional space. Based on the top words of the first five principal components (PCs) before rotation, PC1 seems to capture time-related and logistical aspects of air travel such as waiting at the gate or contacting an agent, while PC2 focuses on the amenities and comfort offered to passengers such as seat class and lounge access. PC3 is 1 baggage-related, focused on issues like carrying and claiming luggage, while PC4 is more related to disruptions in travel plans such as cancellations or mask-wearing policies. PC5 appears to be focused on interactions with airline staff, such as booking a ticket or confirming a seat.To improve interpretability, rotation techniques such as varimax rotation were used to find dimensions or directions that have a strong relationship with a small set of words and can be viewd in Figure 1.
+
+```{r}
+# PCA
+
+review_tdm <- t(dfm)
+
+
+counts <- rowSums(as.matrix(review_tdm)) 
+sortedcount <- counts%>% sort(decreasing=TRUE)
+nwords<-200
+sortednames <- names(sortedcount[1:nwords])
+
+pca_results <- prcomp(t(review_tdm[1:1000,]), scale = FALSE, rank. = 50) 
+pca_results_backup <- pca_results  # create a backup of results for later use
+
+fviz_screeplot(pca_results,ncp=30)
+
+ncomp<-5
+pca_results_backup <- pca_results
+```
+
+```{r}
+#select the most important words per dimension
+
+j<-1
+toplist <- abs(pca_results$rotation[,j]) %>% sort(decreasing=TRUE) %>% head(10)
+topwords <- (names(toplist))
+for (j in 2:ncomp){
+  toplist <- abs(pca_results$rotation[,j]) %>% sort(decreasing=TRUE) %>% head(10)
+  topwords <-cbind( topwords , (names(toplist)))
+}
+
+topwords
+
+#unrotated pca plot dim 1 and 2
+axeslist <- c(1, 2)
+fviz_pca_var(pca_results, axes=axeslist 
+             ,geom.var = c("arrow", "text")
+             ,col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE)
+
+
+rawLoadings <- pca_results$rotation[,1:5] %*% diag(pca_results$sdev, ncomp, ncomp)
+rotated <- varimax(rawLoadings)
+pca_results$rotation <- rotated$loadings
+pca_results$x <- scale(pca_results$x[,1:ncomp]) %*% rotated$rotmat
+
+
+#select the most important words per rotated dimension
+
+j<-1
+toplist <- abs(pca_results$rotation[,j]) %>% sort(decreasing=TRUE) %>% head(10)
+topwords <- (names(toplist))
+for (j in 2:ncomp){
+  toplist <- abs(pca_results$rotation[,j]) %>% sort(decreasing=TRUE) %>% head(10)
+  topwords <-cbind( topwords , (names(toplist)))
+}
+
+topwords
+
+pca_results_small <- pca_results
+pca_results_small$x <- pca_results_small$x[1:200,] # Keep only 200 reviews to plot
+pca_results <- pca_results_small
+```
+
+The top words in each of the five rotated dimensions in the plot are indicative of the main topics and aspects of air travel that are most important to customers. PC1 relates to time-related aspects like delays, waiting times, and connections. PC2 concerns the quality of services, amenities, and class of service. PC3 is about luggage handling, including check-in, claiming, and related communication with the airline. PC4 covers seating arrangements and interactions with flight attendants. Lastly, PC5 pertains to the financial aspects of air travel, such as ticket cost, class of service, and related communication with the airline.The rotated graph in Figure appears to show more meaningful and visible clusters.
+
+```{r}
+#rotated pc plot dim 1 and 2
+axeslist <- c(1, 2)
+fviz_pca_var(pca_results, axes=axeslist 
+             ,geom.var = c("arrow", "text")
+             ,col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE)
+```
+
+```{r}
+#reviews location on pc plot 
+axeslist=c(1,2)
+fviz_pca_ind(pca_results, axes = axeslist,
+             col.ind = "cos2", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = FALSE,     # Avoid text overlapping
+             #             geom = "point" # shows only points and no lables
+)
+
+####
+```
+
+```{r}
+#pca plot of dim 3 and 4
+axeslist=c(3,4)
+fviz_pca_var(pca_results, axes=axeslist 
+             ,col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+)
+```
+
+A two dimensional biplot can be utilized to display the positions of all reviews in the 2D space and
+provides a more complete understanding of the relationships between the reviews and the dimensions in the rotated PCA plot. By comparing Figure 2 with the plot of the words, one can recognize the main theme of the review and the dimension it is related to. The biplot also emphasizes the reviews in each dimension and the dimensions\' interpretations by displaying what words are linked to these dimensions. This can be applied when interpreting the locations of the reviews and better comprehend of the underlying factors that drive customer perceptions and satisfaction.
+
+```{r}
+#plot of reviews on dim 3 and 4
+axeslist=c(3,4)
+fviz_pca_ind(pca_results, axes = axeslist, 
+             col.ind = "cos2", # Color by the quality of representation
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+)
+```
+
+```{r}
+#biplot of pc 3 and 4
+axeslist=c(3,4)
+fviz_pca_biplot(pca_results, repel = TRUE,axes=axeslist,
+                ,col.ind = "cos2" # Color by the quality of representation
+                ,col.var = "contrib" # Color by contributions to the PC
+)
+```
+
+### Multi- Dimensional Scaling (MDS)
+
+By mapping words on a 2D or 3D surface and trying to maintain their relative lengths, Multidimensional
+Scaling (MDS) can be used to show how similar and different words are. Three separate MDS studies were
+conducted, each with a different context: one with \"document\" as the context, and two others with \"window\"
+as the context, with windows of sizes 1 and 5, respectively. When the context is set to \"document,\" the plot
+is established based on similarities between entire documents rather than individual words or pairs of words,
+which can lead to more significant and interpretable clusters because the overall similarity of documents
+containing related words and concepts can be seen. Since the plot is built from the commonalities between
+individual words, when the context is set to a small window (ex. 1), wider connections between words may
+be missed. When the window size is bigger (ex. 5), the plot is also based on word similarity but within
+a larger context, helping to capture wider links between ideas; however, it may be challenging to identify
+interpretable groups due to the inclusion of non-meaningful noise.
+
+```{r}
+{r}
+##MDS
+
+#####
+# Create a corpus from the tokenized dataset
+corpus <- df_tokens %>% 
+  group_by(Customer_ID) %>% 
+  summarise(text = paste(word, collapse = " "))
+
+#corpus and dfm
+corpus <- corpus(corpus, docid_field = "Customer_ID", text_field = "text")
+dfm <- dfm(corpus)
+
+####
+# apply TF-IDF weighting
+dfm <- dfm_tfidf(dfm)
+
+# get top terms by TF-IDF
+tfidf_terms <- topfeatures(dfm, n = 20)
+test <- as.data.frame(tfidf_terms)
+test <- rownames_to_column(test)
+
+# plot the terms by TF-IDF
+ggplot(test, aes(x = rowname, y = tfidf_terms)) + 
+  geom_col(fill = "skyblue") + 
+  coord_flip() + 
+  labs(x = NULL, y = "TF-IDF") + 
+  theme(text = element_text(size = 17)) + 
+  ggtitle("Top Terms by TF-IDF")
+
+```
+
+```{r}
+#MDS with context = "document"
+
+# create a co-occurrence matrix
+co_occurrence_matrix <- fcm(dfm, context = "document", 
+                            count = "frequency", tri = FALSE)
+
+#Need number of documents with each word on the diagonal
+counts <- colSums(as.matrix(dfm))
+co_occurrence_matrix <- as.matrix(co_occurrence_matrix)
+diag(co_occurrence_matrix) <- counts
+sortedcount <- counts %>% sort(decreasing=TRUE)
+sortednames <- names(sortedcount)
+nwords <- 200
+subset_words <- names(sortedcount[1:nwords])
+dfm_subset <- dfm_select(dfm, pattern = names(sortedcount[1:nwords]))
+co_occurrence_matrix_window <- fcm(dfm_subset, context = "document", 
+                                   count = "frequency", tri = FALSE)
+
+diag(co_occurrence_matrix_window) <- colSums(as.matrix(dfm_subset))
+co_occurrence_matrix_window[1:15, 1:15]
+```
+
+```{r}
+# Transform similarities to distances
+distances <- sim2diss(co_occurrence_matrix_window, method = "cooccurrence")
+
+# Find the best matching coordinates in a 2D map given the distances
+MDS_map <- smacofSym(distances)
+
+# Plot the MDS map
+ggplot(as.data.frame(MDS_map$conf), aes(D1, D2, label = rownames(MDS_map$conf))) +
+  geom_text(check_overlap = TRUE) +
+  theme_minimal(base_size = 15) +
+  xlab('') + ylab('') +
+  scale_y_continuous(breaks = NULL) +
+  scale_x_continuous(breaks = NULL)
+```
+
+```{r}
+#MDS with context = "window" and window=1
+
+
+# create co-occurrence matrix with window size 1
+co_occurrence_matrix <- fcm(df_tokens$word, context = "window", window_size = 1)
+
+co_occurrence_matrix<-co_occurrence_matrix[sortednames[1:nwords],sortednames[1:nwords]]
+
+diag(co_occurrence_matrix) <- counts[sortednames[1:nwords]]
+co_occurrence_matrix[1:15,1:15]
+
+distances <- sim2diss(co_occurrence_matrix, method = "cooccurrence") # Transform similarities to distances.
+min(distances) #check whethet minimum distance is positive. Sometimes the counting procedure did something unexpected.
+max(distances) #check whethet minimum distance is positive. Sometimes the counting procedure did something unexpected.
+MDS_map <- smacofSym(distances) # run the routine that finds the best matching coordinates in a 2D mp given the distances
+ggplot(as.data.frame(MDS_map$conf), aes(D1, D2, label = rownames(MDS_map$conf))) +
+  geom_text(check_overlap = TRUE) + theme_minimal(base_size = 15) + xlab('') + ylab('') +
+  scale_y_continuous(breaks = NULL) + scale_x_continuous(breaks = NULL)
+```
+
+```{r}
+#MDS with Window = 5
+
+co_occurrence_matrix <- fcm(df_tokens$word, context = "window", window=5, count = "boolean", tri=FALSE)
+
+co_occurrence_matrix<-co_occurrence_matrix[sortednames[1:nwords],sortednames[1:nwords]]
+
+diag(co_occurrence_matrix) <- counts[sortednames[1:nwords]]
+co_occurrence_matrix[1:15,1:15]
+
+distances <- sim2diss(co_occurrence_matrix, method = "cooccurrence") # Transform similarities to distances.
+MDS_map <- smacofSym(distances) # run the routine that finds the best matching coordinates in a 2D map given the distances
+ggplot(as.data.frame(MDS_map$conf), aes(D1, D2, label = rownames(MDS_map$conf))) +
+  geom_text(check_overlap = TRUE) + theme_minimal(base_size = 15) + xlab('') + ylab('') +
+  scale_y_continuous(breaks = NULL) + scale_x_continuous(breaks = NULL)
+
+
+```
+
+This trend was seen with the results obtained as well in Figure 3, where the most interpretable plot with
+the clearest clusters was the plot with the context set to \"document\". Here, four meaningful clusters have been
+observed. Cluster 1 contains words related to the comfort and amenities of flying, such as \"comfort\", \"food\",
+\"seat\" and \"cabin\", in addition to words related to the experience of flying, such as \"flew\", \"aircraft\". Cluster
+2 contains words related to travel logistics and scheduling, such as \"delay\", \"schedule\" and \"time\",and some
+words related to airport infrastructure, such as \"gate\", \"depart\", and \"arrive\". This suggests that these
+words are often used together when passengers are discussing issues related to travel logistics. Group 3
+contains words related to booking flights and managing travel arrangements, such as \"dollar value\", \"book\",
+\"complete\", \"need\", \"home\", and \"phone\". Group 4 contains words related to lost or delayed luggage and
+other travel-related issues, such as \"luggage\" and \"find\".
+
+### 
+Comparison of PCA and MDS
+
+Both Principal Components Analysis (PCA) and Multi-Dimensional Scaling (MDS) are efficient techniques
+for summarizing the fundamental structure of word vector data, but their methodologies and results vary.
+One dimension is produced by PCA for each component, which can make it challenging to decipher and
+necessitate numerous plots to fully comprehend. In spite of this, PCA offers characteristics that can be
+applied to prediction tasks and enables reviews to be summed up with ratings on different components. A review can be thought of as the combination of all the lines in the graph, which indicate the existence of themes in the reviews. MDS, on the other hand, can offer a simpler two-dimensional representation that can be seen as a singular image. It summarizes the word groups that reflect prevalent topics in reviews and the structure derived from similarity data. The inability to place or summarize reviews in \"MDS\" space makes it more difficult to look at reviews as a whole. PCA offered a better visualization than MDS, based on the results obtained. PCA made it simpler to identify significant and interpretable clusters of terms that were more closely linked to one another.
+
+### Sentence Based Sentiment Analysis using the Polarity Algorithm
+
+Sentiment analysis was performed on the uncleaned Delta Airlines review dataset, without stemming and
+including punctuation, using the Jockers & Rinker dictionary. Due to the fact that the sentiment analysis was
+performed on sentences base the sentiment score was performed as the average sentiment of each individual
+word sentiment. In Figure 4 we can see a histogram and the density of positive and negative reviews. The
+negative reviews out count the positive ones. Moreover we can see a small overlap around a value of 0 in the
+sentiment score due to the fact that those reviews are more neutral but we executed our analysis with on
+only two categories of sentiments.
+
+```{r}
+#Loading the data as new 
+df <- read.csv("C:/Users/ioann/Desktop/Delta_Airline_Review_Dataset-Asof02172023.csv")
+reviews_df <- df
+#Removing the uneccesary part of the reviews.
+reviews_df$reviews <- gsub(".*\\|", "", reviews_df$reviews) 
+```
+
+```{r}
+# Determine sentiments following the Hu and Liu dictionary
+reviews_df$sent <- sentiment_by(get_sentences(reviews_df[,"reviews"]))$ave_sentiment
+
+#Visualizations
+library(ggplot2)
+
+# Get positive reviews: Sentiment score that is higher than 0
+pos_reviews      <- reviews_df %>% filter( reviews_df[,"sent"] > 0)
+# Get negative reviews: Sentiment score that is bellow 0
+neg_reviews      <- reviews_df %>% filter( reviews_df[,"sent"] < 0)
+
+# Determine the average sentiment scores in positive reviews and negative reviews
+for (v in c("sent")){
+  cat(v)
+  cat(" ", mean(neg_reviews[, v]), " ", mean(pos_reviews[, v]), "\n")
+}
+```
+
+```{r }
+# Histogram showing the distribution of different (both positive and negative) sentiment scores
+ggplot(data = reviews_df ,aes(sent)) +
+  geom_histogram(aes(fill = "Positive"),   data = pos_reviews, alpha = 0.5) +
+  geom_histogram(aes(fill = "Negative"), data = neg_reviews, alpha = 0.5) +
+  scale_colour_manual("Sentiment", values = c("green", "red"), aesthetics = "fill")
+```
+
+```{r}
+# Plot sentiment scores for positive and negative reviews
+ggplot() +
+  geom_density(data = pos_reviews, aes(x = sent, fill = "Positive"), alpha = 0.5) +
+  geom_density(data = neg_reviews, aes(x = sent, fill = "Negative"), alpha = 0.5) +
+  scale_fill_manual(values = c("Positive" = "blue", "Negative" = "red")) +
+  ggtitle("Distribution of Sentiment Scores in Positive and Negative Reviews") +
+  xlab("Sentiment Score") +
+  ylab("Density")
+```
+
+Comparing the results of our analysis to the star rating of the data set in Figure 5, it is clear that the
+sentiment score does not follow the star rating. After investigating many individual reviews we figure out
+that the rating that was given to a review was quite incorrect. For example, a review that had a negative
+sentiment intuitively, had been given a star rating of 8. We can conclude that the star rating is not reliable
+and it is a big limitation of our data set.
+
+```{r}
+# plot sentiment based on star rating
+
+ggplot(reviews_df, aes(x = factor(star.rating), y = sent, fill = factor(star.rating))) +
+  geom_violin() +
+  geom_boxplot(width=0.1, fill="white", outlier.shape=NA) +
+  labs(x = "Star Rating", y = "Sentiment Score", title = "Sentiment Score by Star Rating") +
+  theme_minimal()
+
+
+
+
+# Determine sentiments  ignoring amplifications
+reviews_df$sent_noamp <- sentiment_by(get_sentences(reviews_df[,"reviews"]),
+                                            hyphen = "",
+                                            amplifier.weight = 0.0, n.before = 5, n.after = 2,
+                                            question.weight = 1, but.weight = 0.0, missing_value = 0,)$ave_sentiment
+
+
+
+
+# Plot the sentiment scores from both dictionaries, with and without negations and amplifications
+par(mfrow = c(2,1))
+hist(reviews_df$sent, main = " Dictionary (with negations and amplifications)")
+hist(reviews_df$sent_noamp, main =  "Dictionary (without negations and amplifications)")
+```
+
+To continue we experimented with the settings of the sentiment analysis algorithm if it would affect the
+sentiments for the reviews. We first ignored the amplifiers and after that we set the weight of the amplifiers to 3. On both scenarios we obtained almost similar results as it is evidenced from Figure 6 with our initial result as we got coefficients of 0.98 and 0.95 respectively.
+
+```{r}
+# Calculate the correlation between the original sentiment scores and the sentiment scores that ignore negations and amplifications
+cor(reviews_df$sent, reviews_df$sent_noamp)
+
+# Determine sentiments with amplifier weight set at 3
+reviews_df$sent_amp <- sentiment_by(get_sentences(reviews_df[,"reviews"]),
+                                            hyphen = "",
+                                            amplifier.weight = 3.0, n.before = 5, n.after = 2,
+                                            question.weight = 1, but.weight = 0.0, missing_value = 0,)$ave_sentiment
+cor(reviews_df$sent, reviews_df$sent_amp)
+par(mfrow = c(2,1))
+hist(reviews_df$sent, main = " Dictionary (with negations and amplifications)")
+hist(reviews_df$sent_amp, main =  "Dictionary (with amplifers wieght set to 3)")
+
+```
+
+Figure 7 demonstrates the most frequent words in positive and negative reviews respectively.
+
+```{r}
+#Wordclouds
+
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+
+# Create a function to clean and preprocess the corpus
+clean_corpus <- function(corpus) {
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, removeWords, stopwords("english"))
+  corpus <- tm_map(corpus, stripWhitespace)
+  return(corpus)
+}
+
+# Create a corpus for positive reviews
+pos_corpus <- Corpus(VectorSource(pos_reviews$reviews))
+pos_corpus <- clean_corpus(pos_corpus)
+
+# Get the frequency of the words in the corpus
+pos_freq <- sort(colSums(as.matrix(DocumentTermMatrix(pos_corpus))), decreasing = TRUE)
+
+# Generate a word cloud
+set.seed(123)
+wordcloud(words = names(pos_freq), freq = pos_freq, min.freq = 20, max.words = 200, random.order = FALSE, colors = brewer.pal(8, "Dark2"))
+```
+
+```{r}
+# Create a corpus for negative reviews
+neg_corpus <- Corpus(VectorSource(neg_reviews$reviews))
+neg_corpus <- clean_corpus(neg_corpus)
+
+# Get the frequency of the words in the corpus
+neg_freq <- sort(colSums(as.matrix(DocumentTermMatrix(neg_corpus))), decreasing = TRUE)
+
+# Generate a word cloud for negative reviews
+set.seed(123)
+wordcloud(words = names(neg_freq), freq = neg_freq, min.freq = 20, max.words = 200, random.order = FALSE, colors = brewer.pal(8, "Dark2"))
+
+```
+
+### Latent Dirichlet Allocation (LDA)
+
+In the fourth stage of the analysis, a Latent Dirichlet Allocation (LDA) was contacted on the Delta airline
+dataset. LDA is a soft clustering method, because a term can belong to multiple topics and a document can be about multiple topics. In comparison with the hard clustering method, where an object is allocated to one single cluster. In LDA it is necessary to find the optimal number of topics K. There are two methods that can be used to estimate the topics. A Variational estimation was used. Moreover, to find the optimal number of topics K, a balance in the in-sample fit with the model complexity is needed. To find the a perplexity of a set of documents was used.
+The optimal number of topics is 5. Afterwards with the use of a search grid for hyperparameter tuning
+the optimal alpha was 1.Before tuning the models perplexity was way too high but, after tuning the final
+model had a perplexity of approximately 677.In Figure 8 below, 5 topics can be seen. Each topic can be
+given a name, by looking at the most important terms in the topic. The first topic is called Punctuality,
+because the most important terms in this topic are: flight, delay, delta, hour, time. The second topic is
+named Comfort, because the most important terms are: seat, flight, class and food. The third topic is named Customer Service, because the most important terms are: delta, hour, told, call and ticket. The fourth topic is called Airline, because of the words airline, service, check, bag. The fifth topic is called, Boarding, because the words: gate, board, seat, plane, indicate that these reviews might be about the boarding process.
+
+```{r}
+# Load required packages
+library(tidyverse)
+library(tidytext)
+library(topicmodels)
+library(dplyr)
+library(SnowballC)
+library(ggplot2)
+
+# train test split 
+
+set.seed(123)
+
+train_index <- sample(nrow(reviews_df), 0.8 * nrow(reviews_df))
+train_data <- reviews_df[train_index, ]
+test_data <- reviews_df[-train_index, ]
+
+# document-term matrices for train and test sets
+train_dtm <- train_data %>%
+  unnest_tokens(word, reviews) %>%
+  anti_join(stop_words) %>% 
+  filter(str_detect(word, "^[a-zA-Z]+$")) %>% 
+  mutate(word = wordStem(word, language = "porter")) %>%
+  count(Customer_ID, word, sort = TRUE) %>%
+  cast_dtm(Customer_ID, word, n)
+
+test_dtm <- test_data %>%
+  unnest_tokens(word, reviews) %>%
+  anti_join(stop_words) %>% 
+  filter(str_detect(word, "^[a-zA-Z]+$")) %>% 
+  mutate(word = wordStem(word, language = "porter")) %>% 
+  count(Customer_ID, word, sort = TRUE) %>%
+  cast_dtm(Customer_ID, word, n)
+
+# Set the number of topics 
+num_topics <- 5
+
+# LDA model with VEM
+lda_model <- LDA(train_dtm, num_topics, 
+                 doc_word_count = apply(train_dtm, 1, sum),
+                 control = list(seed = 1234,
+                                alpha = 0.1,
+                                em = list(iter.max = 1000, tol = 0.001)))
+
+# search grid for hyperparameters
+search_grid <- expand.grid(alpha = seq(0.1, 1, by = 0.1),
+                           iter.max = c(1000, 2000, 3000))
+
+# function to evaluate model with given hyperparameters
+evaluate_model <- function(alpha, iter.max) {
+  model <- LDA(train_dtm, num_topics, 
+               doc_word_count = apply(train_dtm, 1, sum),
+               control = list(seed = 1234,
+                              alpha = alpha,
+                              em = list(iter.max = iter.max, tol = 0.001)))
+  perplexity <- perplexity(model, test_dtm)
+  return(perplexity)
+}
+
+# evaluate all models in the search grid
+perplexity_scores <- apply(search_grid, 1, function(params) {
+  evaluate_model(params[["alpha"]], params[["iter.max"]])
+})
+
+#  best hyperparameters
+best_params <- search_grid[which.min(perplexity_scores),]
+best_perplexity <- min(perplexity_scores)
+
+# train the final model with the best hyperparameters
+final_model <- LDA(train_dtm, num_topics, 
+                   doc_word_count = apply(train_dtm, 1, sum),
+                   control = list(seed = 1234,
+                                  alpha = best_params[["alpha"]],
+                                  em = list(iter.max = best_params[["iter.max"]], tol = 0.001)))
+
+
+perplexity <- perplexity(final_model, newdata = test_dtm)
+cat("Perplexity:", perplexity, "\n")
+
+# Most important terms for each topic
+lda_terms <- tidy(final_model, matrix = "beta") %>%
+group_by(topic) %>%
+top_n(10, beta) %>%
+ungroup() %>%
+arrange(topic, -beta)
+
+# Bar plot of the most frequent terms for each topic
+ggplot(lda_terms, aes(x = reorder(term, beta), y = beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "Term", y = "Beta", title = "Top 10 terms by topic") +
+  facet_wrap(~topic, scales = "free") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+                 
+# Print 
+lda_terms
+                 
+
+# Calculate perplexity on train and test sets
+train_perplexity <- perplexity(final_model, newdata = train_dtm)
+test_perplexity <- perplexity(final_model, newdata = test_dtm)
+
+# Create a data frame for plotting
+perplexity_df <- data.frame(
+  dataset = c("Train", "Test"),
+  perplexity = c(train_perplexity, test_perplexity)
+)
+
+# Create the plot
+ggplot(perplexity_df, aes(x = dataset, y = perplexity)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Perplexity by Dataset",
+       x = "Dataset",
+       y = "Perplexity")
+
+
+```
+
+## 
+Conclusions
+
+In conclusion, the analysis of Delta airline reviews using techniques such as PCA, MDS, Sentiment Analysis, and LDA provided insights into customer opinions and identified important topics discussed in the reviews. Through PCA, the main themes and aspects of air travel that were most important to customers were identified, and MDS was used to show how similar and different words were. The sentiment analysis revealed that customers\' overall sentiment towards Delta airline was mostly negative. Finally, LDA helped to identify specific topics within the reviews, such as flight booking and customer service. These techniques provide valuable insights for businesses looking to understand customer feedback and improve their products or services.
+
+
+
